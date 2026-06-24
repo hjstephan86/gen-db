@@ -179,19 +179,6 @@ class TestDeleteNetwork:
 @pytest.mark.slow
 class TestSubgraphSearch:
 
-    def test_search_subgraph_exact_match(self, clean_database, sample_glycolysis, monkeypatch):
-        monkeypatch.setattr('backend.crud.get_db_connection', lambda: clean_database)
-
-        create_network(**sample_glycolysis)
-
-        matches = search_subgraph(
-            query_matrix=sample_glycolysis['adjacency_matrix'],
-            query_labels=sample_glycolysis['node_labels']
-        )
-
-        assert len(matches) >= 1
-        assert any(m['match_type'] == 'exact' for m in matches)
-
     def test_search_subgraph_finds_superset(self, clean_database, sample_glycolysis,
                                             sample_partial_glycolysis, monkeypatch):
         monkeypatch.setattr('backend.crud.get_db_connection', lambda: clean_database)

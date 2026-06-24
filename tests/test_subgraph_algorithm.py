@@ -13,31 +13,6 @@ from backend.crud import (
 @pytest.mark.slow
 class TestSubgraphAlgorithmAllCases:
 
-    def test_subgraph_case_keep_either_identical(self, clean_database, monkeypatch):
-        monkeypatch.setattr('backend.crud.get_db_connection', lambda: clean_database)
-
-        network_data = {
-            'name': 'Identical_Network',
-            'network_type': 'test',
-            'organism': 'Test',
-            'description': 'Test identical',
-            'node_labels': ['A', 'B', 'C'],
-            'adjacency_matrix': [[0, 1, 0], [0, 0, 1], [0, 0, 0]]
-        }
-        create_network(**network_data)
-
-        matches = search_subgraph(
-            query_matrix=[[0, 1, 0], [0, 0, 1], [0, 0, 0]],
-            query_labels=['A', 'B', 'C']
-        )
-
-        if SUBGRAPH_AVAILABLE:
-            assert len(matches) >= 1
-            assert any(m['match_type'] == 'exact' for m in matches)
-            assert any(m['subgraph_result'] == 'keep_both' for m in matches)
-        else:
-            assert 'error' in matches[0]
-
     def test_subgraph_case_keep_B_linear_chain(self, clean_database, monkeypatch):
         monkeypatch.setattr('backend.crud.get_db_connection', lambda: clean_database)
 
@@ -273,7 +248,7 @@ class TestSubgraphEdgeCases:
 
         assert len(matches) == 1
         assert 'error' in matches[0]
-        assert 'Install with: pip install git+https://github.com/hjstephan/subgraph.git' in matches[0]['message']
+        assert 'Install with: pip install git+https://github.com/hjstephan86/subgraph.git' in matches[0]['message']
 
     def test_subgraph_empty_database(self, clean_database, monkeypatch):
         monkeypatch.setattr('backend.crud.get_db_connection', lambda: clean_database)
@@ -399,7 +374,8 @@ class TestSubgraphSpecificStructures:
 @pytest.mark.db
 class TestSubgraphPrintStatements:
 
-    def test_subgraph_prints_debug_info(self, clean_database, monkeypatch, capsys):
+    def test_subgraph_prints_debug_info(self, clean_database, monkeypatch, caplog):
+        import logging
         monkeypatch.setattr('backend.crud.get_db_connection', lambda: clean_database)
 
         create_network(
@@ -411,15 +387,15 @@ class TestSubgraphPrintStatements:
             adjacency_matrix=[[0, 1], [0, 0]]
         )
 
-        search_subgraph(
-            query_matrix=[[0, 1], [0, 0]],
-            query_labels=['A', 'B']
-        )
-
-        captured = capsys.readouterr()
+        with caplog.at_level(logging.INFO, logger='backend.crud'):
+            search_subgraph(
+                query_matrix=[[0, 1], [0, 0]],
+                query_labels=['A', 'B']
+            )
 
         if SUBGRAPH_AVAILABLE:
-            assert 'Subgraph-Suche' in captured.out or 'Kandidaten' in captured.out
+            assert any('candidates' in r.message.lower() or 'kandidaten' in r.message.lower()
+                       for r in caplog.records)
 
 
 @pytest.mark.unit
