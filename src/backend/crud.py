@@ -1,14 +1,17 @@
+import logging
 import hashlib
 import numpy as np
 from typing import List, Dict, Optional
 from backend.database import get_db_connection, get_db_cursor
+
+logger = logging.getLogger(__name__)
 
 # Import Subgraph Algorithmus aus dem hjstephan86/subgraph Package
 try:
     from subgraph import Subgraph
     SUBGRAPH_AVAILABLE = True
 except ImportError:
-    print("WARNING: Subgraph package not available. Install with: pip install git+https://github.com/hjstephan86/subgraph.git")
+    logger.warning("Subgraph package not available. Install with: pip install git+https://github.com/hjstephan86/subgraph.git")
     SUBGRAPH_AVAILABLE = False
 
 if SUBGRAPH_AVAILABLE:
@@ -33,6 +36,7 @@ def create_network(name: str, network_type: str, organism: str,
                    description: str, node_labels: List[str],
                    adjacency_matrix: List[List[int]]) -> Dict:
     """Erstellt neues biologisches Netzwerk"""
+    logger.info(f"create_network: name={name} type={network_type} organism={organism}")
     with get_db_connection() as conn:
         cursor = get_db_cursor(conn)
 
@@ -58,6 +62,7 @@ def create_network(name: str, network_type: str, organism: str,
             VALUES (%s, %s, %s, %s, %s)
         """, (network_id, node_labels, adjacency_matrix, signatures, sig_hash))
 
+        logger.info(f"create_network: Created network_id={network_id} nodes={node_count} edges={edge_count}")
         return {
             'network_id': network_id,
             'name': name,
@@ -69,20 +74,19 @@ def create_network(name: str, network_type: str, organism: str,
 def get_all_networks(limit: int = 33, random_sample: bool = True) -> List[Dict]:
     """
     Holt Netzwerke aus der DB
-    
+
     Args:
         limit: Maximale Anzahl zurückgegebener Netzwerke (default: 33)
         random_sample: Wenn True, werden zufällige Netzwerke geladen (default: True)
-    
+
     Returns:
         Liste von Netzwerk-Dictionaries
     """
+    logger.info(f"get_all_networks: limit={limit} random_sample={random_sample}")
     with get_db_connection() as conn:
         cursor = get_db_cursor(conn)
-        
+
         if random_sample:
-            # Lade 33 zufällige Netzwerke mit TABLESAMPLE
-            # TABLESAMPLE SYSTEM ist sehr schnell, auch bei Millionen Zeilen
             cursor.execute(f"""
                 SELECT bn.*, nm.node_labels, nm.signature_hash
                 FROM biological_networks bn
@@ -91,7 +95,6 @@ def get_all_networks(limit: int = 33, random_sample: bool = True) -> List[Dict]:
                 LIMIT %s
             """, (limit,))
         else:
-            # Lade neueste Netzwerke
             cursor.execute(f"""
                 SELECT bn.*, nm.node_labels, nm.signature_hash
                 FROM biological_networks bn
@@ -99,11 +102,14 @@ def get_all_networks(limit: int = 33, random_sample: bool = True) -> List[Dict]:
                 ORDER BY bn.created_at DESC
                 LIMIT %s
             """, (limit,))
-        
-        return cursor.fetchall()
+
+        results = cursor.fetchall()
+        logger.info(f"get_all_networks: Fetched {len(results)} records")
+        return results
 
 def get_network_by_id(network_id: int) -> Optional[Dict]:
     """Holt spezifisches Netzwerk mit Matrix"""
+    logger.info(f"get_network_by_id: network_id={network_id}")
     with get_db_connection() as conn:
         cursor = get_db_cursor(conn)
         cursor.execute("""
@@ -112,12 +118,18 @@ def get_network_by_id(network_id: int) -> Optional[Dict]:
             JOIN network_matrices nm ON bn.network_id = nm.network_id
             WHERE bn.network_id = %s
         """, (network_id,))
-        return cursor.fetchone()
+        result = cursor.fetchone()
+        if result:
+            logger.info(f"get_network_by_id: Found network '{result['name']}'")
+        else:
+            logger.warning(f"get_network_by_id: network_id={network_id} not found")
+        return result
 
 def search_subgraph(query_matrix: List[List[int]],
                     query_labels: List[str]) -> List[Dict]:
     """Sucht in DB nach Netzwerken, die query_matrix enthalten koennten."""
     if not SUBGRAPH_AVAILABLE:
+        logger.error("search_subgraph: Subgraph package not installed")
         return [{
             'error': 'Subgraph package not installed',
             'message': 'Install with: pip install git+https://github.com/hjstephan86/subgraph.git'
@@ -141,8 +153,7 @@ def search_subgraph(query_matrix: List[List[int]],
         """, (query_node_count, query_edge_count))
 
         candidates = cursor.fetchall()
-
-        print(f"Subgraph-Suche: {len(candidates)} Kandidaten fuer Query (n={query_node_count}, e={query_edge_count})")
+        logger.info(f"search_subgraph: {len(candidates)} candidates for query (n={query_node_count}, e={query_edge_count})")
 
         matches = []
         for candidate in candidates:
@@ -164,19 +175,22 @@ def search_subgraph(query_matrix: List[List[int]],
                     'match_type': match_type,
                     'subgraph_result': decision
                 })
-            #    print(f"  Match: {candidate['name']} ({decision})")
-            # else:
-            #    print(f"  No match: {candidate['name']} ({decision})")
 
-        print(f"Gefunden: {len(matches)} Matches")
+        logger.info(f"search_subgraph: Found {len(matches)} matches")
         return matches
 
 def delete_network(network_id: int) -> bool:
     """Loescht Netzwerk aus DB (CASCADE loescht auch Matrix)"""
+    logger.info(f"delete_network: network_id={network_id}")
     with get_db_connection() as conn:
         cursor = get_db_cursor(conn)
         cursor.execute("""
             DELETE FROM biological_networks WHERE network_id = %s
             RETURNING network_id
         """, (network_id,))
-        return cursor.fetchone() is not None
+        deleted = cursor.fetchone() is not None
+        if deleted:
+            logger.info(f"delete_network: network_id={network_id} deleted successfully")
+        else:
+            logger.warning(f"delete_network: network_id={network_id} not found")
+        return deleted
