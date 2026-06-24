@@ -45,7 +45,7 @@ python db-populate.py --count 1000
 pytest
 ```
 
-Coverage-Report: `doc/htmlcov/index.html`
+Coverage-Report: `doc/coverage/index.html`
 
 ## Erwerb
 

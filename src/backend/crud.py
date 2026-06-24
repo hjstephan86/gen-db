@@ -3,12 +3,12 @@ import numpy as np
 from typing import List, Dict, Optional
 from backend.database import get_db_connection, get_db_cursor
 
-# Import Subgraph Algorithmus aus dem hjstephan/subgraph Package
+# Import Subgraph Algorithmus aus dem hjstephan86/subgraph Package
 try:
     from subgraph import Subgraph
     SUBGRAPH_AVAILABLE = True
 except ImportError:
-    print("WARNING: Subgraph package not available. Install with: pip install git+https://github.com/hjstephan/subgraph.git")
+    print("WARNING: Subgraph package not available. Install with: pip install git+https://github.com/hjstephan86/subgraph.git")
     SUBGRAPH_AVAILABLE = False
 
 if SUBGRAPH_AVAILABLE:
@@ -120,7 +120,7 @@ def search_subgraph(query_matrix: List[List[int]],
     if not SUBGRAPH_AVAILABLE:
         return [{
             'error': 'Subgraph package not installed',
-            'message': 'Install with: pip install git+https://github.com/hjstephan/subgraph.git'
+            'message': 'Install with: pip install git+https://github.com/hjstephan86/subgraph.git'
         }]
 
     with get_db_connection() as conn:
