@@ -3,4 +3,3 @@ uvicorn[standard]==0.24.0
 psycopg2-binary==2.9.9
 numpy==1.26.4
 python-multipart==0.0.6
-git+https://github.com/hjstephan86/subgraph.git@v1.0.0

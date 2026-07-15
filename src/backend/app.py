@@ -1,10 +1,12 @@
 import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import List, Optional
 from . import crud
+from .subgraph_executor import shutdown_executor
 
 logging.basicConfig(
     level=logging.INFO,
@@ -13,7 +15,26 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Gen - Biological Network Analysis API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Lifecycle Manager für FastAPI App.
+    
+    Startet ProcessPoolExecutor bei App-Start und fahrt ihn bei Shutdown herunter.
+    """
+    # Startup
+    logger.info("Starting up Gen API with C++-based Subgraph Executor")
+    yield
+    # Shutdown
+    logger.info("Shutting down Gen API and Subgraph Executor")
+    shutdown_executor()
+
+
+app = FastAPI(
+    title="Gen - Biological Network Analysis API",
+    lifespan=lifespan
+)
 
 app.add_middleware(
     CORSMiddleware,

@@ -7,7 +7,7 @@ Biological Network Database mit PostgreSQL-Backend, FastAPI-REST-API und Web-Fro
 ### Voraussetzungen
 
 - Python 3.12
-- PostgreSQL (lokal, portable oder via Docker)
+- PostgreSQL (lokal, portable von https://www.enterprisedb.com/download-postgresql-binaries oder via Docker)
 
 ### PostgreSQL einrichten
 
@@ -19,19 +19,33 @@ docker-compose up -d
 psql -U dbuser -h localhost -p 5432 -d gen -f init_db.sql
 ```
 
-### Backend installieren & starten
+### Starten
 
 ```bash
-python -m venv venv
-.\venv\Scripts\Activate.ps1   # Windows
-source venv/bin/activate      # Linux/Mac
-
-pip install -r requirements-dev.txt
-
-uvicorn backend.app:app --app-dir src --reload --port 8000
+PS C:\Users\sepp5\Git> cd .\gen-db\
+PS C:\Users\sepp5\Git\gen-db> C:\Users\sepp5\Downloads\pgsql\bin\pg_ctl.exe -D C:\Users\sepp5\Downloads\pgsql\data -l C:\Users\sepp5\Downloads\pgsql\logfile.log restart
+pg_ctl: PID-Datei »C:/Users/sepp5/Downloads/pgsql/data/postmaster.pid« existiert nicht
+Läuft der Server?
+versuche Server trotzdem zu starten
+warte auf Start des Servers.... fertig
+Server gestartet
+PS C:\Users\sepp5\Git\gen-db> $env:DATABASE_HOST = "localhost"
+PS C:\Users\sepp5\Git\gen-db> $env:DATABASE_NAME = "gendb"
+PS C:\Users\sepp5\Git\gen-db> $env:DATABASE_PASSWORD = ""
+PS C:\Users\sepp5\Git\gen-db> $env:DATABASE_PORT = "5432"
+PS C:\Users\sepp5\Git\gen-db> $env:SUBGRAPH_CLI_PATH = "C:\Users\sepp5\Git\csubgraph\build\subgraph-cli.exe"
+PS C:\Users\sepp5\Git\gen-db> python -m uvicorn src.backend.app:app --reload
+INFO:     Will watch for changes in these directories: ['C:\\Users\\sepp5\\Git\\gen-db']
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [19336] using WatchFiles
+INFO:     Started server process [23512]
+INFO:     Waiting for application startup.
+2026-07-17 08:00:08 [INFO] Starting up Gen API with C++-based Subgraph Executor
+INFO:     Application startup complete.
+2026-07-17 08:00:41 [INFO] GET / - Serving frontend
+INFO:     127.0.0.1:57201 - "GET / HTTP/1.1" 200 OK
 ```
 
-Frontend aufrufen: [http://localhost:8000](http://localhost:8000)
 
 ## 1.000.000 Netzwerke generieren
 
@@ -39,7 +53,7 @@ Frontend aufrufen: [http://localhost:8000](http://localhost:8000)
 python db-populate.py
 ```
 
-## Effiziente Suche
+## Effiziente Suche (ohne csubgraph CLI)
 
 ```bash
 (venv) PS C:\Users\sepp5\Git\gen-db> uvicorn backend.app:app --app-dir src --reload --port 8000

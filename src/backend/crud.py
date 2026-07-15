@@ -2,20 +2,10 @@ import logging
 import hashlib
 import numpy as np
 from typing import List, Dict, Optional
-from backend.database import get_db_connection, get_db_cursor
+from .database import get_db_connection, get_db_cursor
+from .subgraph_executor import compare_graphs_async
 
 logger = logging.getLogger(__name__)
-
-# Import Subgraph Algorithmus aus dem hjstephan86/subgraph Package
-try:
-    from subgraph import Subgraph
-    SUBGRAPH_AVAILABLE = True
-except ImportError:
-    logger.warning("Subgraph package not available. Install with: pip install git+https://github.com/hjstephan86/subgraph.git")
-    SUBGRAPH_AVAILABLE = False
-
-if SUBGRAPH_AVAILABLE:
-    comparator = Subgraph()
 
 def compute_signatures(matrix: np.ndarray) -> List[int]:
     """Berechnet Spalten-Signaturen fuer Adjacency Matrix"""
@@ -127,14 +117,12 @@ def get_network_by_id(network_id: int) -> Optional[Dict]:
 
 def search_subgraph(query_matrix: List[List[int]],
                     query_labels: List[str]) -> List[Dict]:
-    """Sucht in DB nach Netzwerken, die query_matrix enthalten koennten."""
-    if not SUBGRAPH_AVAILABLE:
-        logger.error("search_subgraph: Subgraph package not installed")
-        return [{
-            'error': 'Subgraph package not installed',
-            'message': 'Install with: pip install git+https://github.com/hjstephan86/subgraph.git'
-        }]
-
+    """
+    Sucht in DB nach Netzwerken, die query_matrix enthalten koennten.
+    
+    Nutzt C++-basierte Subgraph-Executor mit ProcessPoolExecutor für
+    parallele nicht-blockierende Ausführung.
+    """
     with get_db_connection() as conn:
         cursor = get_db_cursor(conn)
 
@@ -157,13 +145,23 @@ def search_subgraph(query_matrix: List[List[int]],
 
         matches = []
         for candidate in candidates:
-            candidate_matrix = np.array(candidate['adjacency_matrix'], dtype=int)
+            candidate_matrix = candidate['adjacency_matrix']  # Ist bereits Liste[Liste[int]]
 
-            result = comparator.compare_graphs(query_np, candidate_matrix)
-            decision = result[0] if isinstance(result, tuple) else result
+            # Führe C++-Vergleich aus (non-blocking über ProcessPoolExecutor)
+            result, error = compare_graphs_async(query_matrix, candidate_matrix)
+            
+            if error:
+                logger.warning(f"search_subgraph: Comparison error for network {candidate['network_id']}: {error}")
+                continue
 
-            if decision in ['keep_B', 'keep_both']:
-                match_type = 'exact' if decision == 'keep_both' else 'subgraph'
+            # Konvertiere C++-Result-Codes zu Match-Typen
+            # KEEP_A (0): Query ist Subgraph von Candidate
+            # KEEP_B (1): Candidate ist Subgraph von Query (Match!)
+            # KEEP_BOTH (2): Keine Subgraph-Beziehung
+            # IDENTICAL (3): Identische Graphen (Match!)
+
+            if result in ['KEEP_B', 'IDENTICAL']:
+                match_type = 'exact' if result == 'IDENTICAL' else 'subgraph'
                 matches.append({
                     'network_id': candidate['network_id'],
                     'name': candidate['name'],
@@ -173,7 +171,7 @@ def search_subgraph(query_matrix: List[List[int]],
                     'node_count': candidate['node_count'],
                     'edge_count': candidate['edge_count'],
                     'match_type': match_type,
-                    'subgraph_result': decision
+                    'subgraph_result': result
                 })
 
         logger.info(f"search_subgraph: Found {len(matches)} matches")

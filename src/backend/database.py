@@ -3,8 +3,8 @@ from psycopg2.extras import RealDictCursor
 from contextlib import contextmanager
 
 DATABASE_CONFIG = {
-    'dbname': 'gen',
-    'user': 'dbuser',
+    'dbname': 'gendb',
+    'user': 'postgres',
     'password': 'dbpassword',
     'host': 'localhost',
     'port': 5432
