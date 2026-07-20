@@ -2,17 +2,17 @@
 Configuration Management für Gen-DB
 
 Zentrale Konfigurationshandhabung mit:
-- Environment Variable Parsing
-- Validation
+- Environment Variable Parsing (via Pydantic)
+- Validation (via Pydantic validators)
 - Default Values
 - Type Conversion
 """
 
-import os
 import logging
+from typing import Optional, List, Any, Dict
 from pathlib import Path
-from typing import Optional, Any, Dict
-from functools import lru_cache
+from pydantic import BaseModel, Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
 
@@ -22,211 +22,117 @@ class ConfigError(Exception):
     pass
 
 
-class Config:
+class Config(BaseSettings):
     """
     Zentrale Konfiguration für Gen-DB
     
     Lädt Konfiguration aus (in dieser Reihenfolge):
     1. Umgebungsvariablen
-    2. .env Datei
+    2. .env Datei (automatisch via Pydantic)
     3. Defaults
     """
     
-    # Defaults
-    DEBUG: bool = False
-    LOG_LEVEL: str = "INFO"
-    API_HOST: str = "0.0.0.0"
-    API_PORT: int = 8000
+    model_config = SettingsConfigDict(
+        env_file='.env',
+        env_file_encoding='utf-8',
+        case_sensitive=False,
+        extra='ignore'
+    )
     
-    # Subgraph Executor
-    SUBGRAPH_CLI_PATH: Optional[str] = None
-    SUBGRAPH_MAX_WORKERS: Optional[int] = None
-    SUBGRAPH_TIMEOUT: int = 30
+    # === API Configuration ===
+    api_host: str = Field(default="0.0.0.0", description="API bind host")
+    api_port: int = Field(default=8000, ge=1, le=65535, description="API port")
+    debug: bool = Field(default=False, description="Enable debug mode")
+    log_level: str = Field(default="INFO", description="Logging level")
+    reload: bool = Field(default=False, description="Enable auto-reload")
+    show_sql: bool = Field(default=False, description="Show SQL queries")
     
-    # Database
-    DATABASE_HOST: str = "localhost"
-    DATABASE_PORT: int = 5432
-    DATABASE_USER: str = "postgres"
-    DATABASE_PASSWORD: str = "postgres"
-    DATABASE_NAME: str = "gendb"
-    DATABASE_POOL_SIZE: int = 10
-    DATABASE_POOL_RECYCLE: int = 3600
-    DATABASE_SSL_MODE: str = "disable"
+    # === Subgraph Executor ===
+    subgraph_cli_path: Optional[str] = Field(default=None, description="Path to Subgraph CLI")
+    subgraph_max_workers: Optional[int] = Field(default=None, ge=1, description="Max workers for Subgraph")
+    subgraph_timeout: int = Field(default=30, ge=5, description="Subgraph timeout in seconds")
     
-    # CORS
-    CORS_ORIGINS: list = ["http://localhost:3000", "http://localhost:8000"]
-    CORS_METHODS: list = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
-    CORS_HEADERS: list = ["Content-Type", "Authorization"]
-    CORS_CREDENTIALS: bool = True
+    # === Database Configuration ===
+    database_host: str = Field(default="localhost", description="Database host")
+    database_port: int = Field(default=5432, ge=1, le=65535, description="Database port")
+    database_user: str = Field(default="postgres", description="Database user")
+    database_password: str = Field(default="postgres", description="Database password")
+    database_name: str = Field(default="gendb", description="Database name")
+    database_pool_size: int = Field(default=10, ge=1, description="Connection pool size")
+    database_pool_recycle: int = Field(default=3600, ge=1, description="Connection pool recycle time")
+    database_ssl_mode: str = Field(default="disable", description="SSL mode")
     
-    # Rate Limiting
-    RATE_LIMIT_REQUESTS: int = 300
-    RATE_LIMIT_WINDOW: int = 1
+    # === CORS Configuration ===
+    cors_origins: List[str] = Field(
+        default=["http://localhost:3000", "http://localhost:8000"],
+        description="CORS allowed origins"
+    )
+    cors_methods: List[str] = Field(
+        default=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        description="CORS allowed methods"
+    )
+    cors_headers: List[str] = Field(
+        default=["Content-Type", "Authorization"],
+        description="CORS allowed headers"
+    )
+    cors_credentials: bool = Field(default=True, description="CORS credentials")
     
-    # Monitoring
-    ENABLE_PROMETHEUS: bool = False
-    PROMETHEUS_PORT: int = 9090
-    ENABLE_REQUEST_TRACKING: bool = True
+    # === Rate Limiting ===
+    rate_limit_requests: int = Field(default=300, ge=1, description="Rate limit requests")
+    rate_limit_window: int = Field(default=1, ge=1, description="Rate limit window in seconds")
     
-    # Security
-    SECRET_KEY: str = "change-this-in-production"
-    MAX_UPLOAD_SIZE: int = 10485760  # 10MB
+    # === Monitoring ===
+    enable_prometheus: bool = Field(default=False, description="Enable Prometheus metrics")
+    prometheus_port: int = Field(default=9090, ge=1, le=65535, description="Prometheus port")
+    enable_request_tracking: bool = Field(default=True, description="Enable request tracking")
     
-    # Container
-    CONTAINER_ENV: str = "production"
+    # === Security ===
+    secret_key: str = Field(default="change-this-in-production", description="Secret key for security")
+    max_upload_size: int = Field(default=10485760, ge=1, description="Max upload size in bytes")
     
-    # Development
-    RELOAD: bool = False
-    SHOW_SQL: bool = False
-    GENERATE_FAKE_DATA: bool = False
-    FAKE_DATA_COUNT: int = 10
+    # === Container & Environment ===
+    container_env: str = Field(default="production", description="Container environment")
     
+    # === Development ===
+    generate_fake_data: bool = Field(default=False, description="Generate fake data on startup")
+    fake_data_count: int = Field(default=10, ge=1, description="Number of fake data records")
+    
+    @field_validator('log_level')
     @classmethod
-    def from_env(cls) -> "Config":
-        """
-        Lädt Konfiguration aus Umgebungsvariablen und .env Datei
-        
-        Returns:
-            Config Instanz
-        """
-        instance = cls()
-        
-        # Lade .env Datei falls vorhanden
-        env_file = Path(".env")
-        if env_file.exists():
-            logger.info(f"Loading .env from {env_file.absolute()}")
-            instance._load_env_file(env_file)
-        
-        # Lade Umgebungsvariablen (überschreiben .env)
-        instance._load_from_env()
-        
-        # Validiere Konfiguration
-        instance._validate()
-        
-        logger.info(f"Configuration loaded (ENV={instance.CONTAINER_ENV})")
-        
-        return instance
+    def validate_log_level(cls, v: str) -> str:
+        """Validate log level"""
+        valid_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+        v_upper = v.upper()
+        if v_upper not in valid_levels:
+            raise ValueError(f"LOG_LEVEL must be one of {valid_levels}, got {v}")
+        return v_upper
     
+    @field_validator('database_ssl_mode')
     @classmethod
-    def _load_env_file(cls, env_file: Path) -> None:
-        """Lade .env Datei in os.environ"""
-        with open(env_file) as f:
-            for line in f:
-                line = line.strip()
-                # Ignoriere Kommentare und leere Zeilen
-                if not line or line.startswith('#'):
-                    continue
-                
-                # Parse KEY=VALUE
-                if '=' in line:
-                    key, value = line.split('=', 1)
-                    key = key.strip()
-                    value = value.strip().strip('"').strip("'")
-                    os.environ[key] = value
+    def validate_database_ssl_mode(cls, v: str) -> str:
+        """Validate database SSL mode"""
+        valid_modes = ["disable", "allow", "prefer", "require", "verify-ca", "verify-full"]
+        if v.lower() not in valid_modes:
+            raise ValueError(f"DATABASE_SSL_MODE must be one of {valid_modes}, got {v}")
+        return v.lower()
     
-    def _load_from_env(self) -> None:
-        """Lade Umgebungsvariablen"""
-        # Boolean
-        self.DEBUG = self._parse_bool("DEBUG", self.DEBUG)
-        self.RELOAD = self._parse_bool("RELOAD", self.RELOAD)
-        self.SHOW_SQL = self._parse_bool("SHOW_SQL", self.SHOW_SQL)
-        self.GENERATE_FAKE_DATA = self._parse_bool("GENERATE_FAKE_DATA", self.GENERATE_FAKE_DATA)
-        self.ENABLE_PROMETHEUS = self._parse_bool("ENABLE_PROMETHEUS", self.ENABLE_PROMETHEUS)
-        self.ENABLE_REQUEST_TRACKING = self._parse_bool("ENABLE_REQUEST_TRACKING", self.ENABLE_REQUEST_TRACKING)
-        self.CORS_CREDENTIALS = self._parse_bool("CORS_CREDENTIALS", self.CORS_CREDENTIALS)
-        
-        # String
-        self.LOG_LEVEL = os.environ.get("LOG_LEVEL", self.LOG_LEVEL).upper()
-        self.API_HOST = os.environ.get("API_HOST", self.API_HOST)
-        self.DATABASE_HOST = os.environ.get("DATABASE_HOST", self.DATABASE_HOST)
-        self.DATABASE_USER = os.environ.get("DATABASE_USER", self.DATABASE_USER)
-        self.DATABASE_PASSWORD = os.environ.get("DATABASE_PASSWORD", self.DATABASE_PASSWORD)
-        self.DATABASE_NAME = os.environ.get("DATABASE_NAME", self.DATABASE_NAME)
-        self.DATABASE_SSL_MODE = os.environ.get("DATABASE_SSL_MODE", self.DATABASE_SSL_MODE)
-        self.CONTAINER_ENV = os.environ.get("CONTAINER_ENV", self.CONTAINER_ENV)
-        self.SECRET_KEY = os.environ.get("SECRET_KEY", self.SECRET_KEY)
-        self.SUBGRAPH_CLI_PATH = os.environ.get("SUBGRAPH_CLI_PATH", self.SUBGRAPH_CLI_PATH)
-        
-        # Integer
-        self.API_PORT = self._parse_int("API_PORT", self.API_PORT)
-        self.DATABASE_PORT = self._parse_int("DATABASE_PORT", self.DATABASE_PORT)
-        self.DATABASE_POOL_SIZE = self._parse_int("DATABASE_POOL_SIZE", self.DATABASE_POOL_SIZE)
-        self.DATABASE_POOL_RECYCLE = self._parse_int("DATABASE_POOL_RECYCLE", self.DATABASE_POOL_RECYCLE)
-        self.SUBGRAPH_MAX_WORKERS = self._parse_int("SUBGRAPH_MAX_WORKERS", self.SUBGRAPH_MAX_WORKERS)
-        self.SUBGRAPH_TIMEOUT = self._parse_int("SUBGRAPH_TIMEOUT", self.SUBGRAPH_TIMEOUT)
-        self.RATE_LIMIT_REQUESTS = self._parse_int("RATE_LIMIT_REQUESTS", self.RATE_LIMIT_REQUESTS)
-        self.RATE_LIMIT_WINDOW = self._parse_int("RATE_LIMIT_WINDOW", self.RATE_LIMIT_WINDOW)
-        self.PROMETHEUS_PORT = self._parse_int("PROMETHEUS_PORT", self.PROMETHEUS_PORT)
-        self.MAX_UPLOAD_SIZE = self._parse_int("MAX_UPLOAD_SIZE", self.MAX_UPLOAD_SIZE)
-        self.FAKE_DATA_COUNT = self._parse_int("FAKE_DATA_COUNT", self.FAKE_DATA_COUNT)
-        
-        # Lists (comma-separated)
-        self.CORS_ORIGINS = self._parse_list("CORS_ORIGINS", self.CORS_ORIGINS)
-        self.CORS_METHODS = self._parse_list("CORS_METHODS", self.CORS_METHODS)
-        self.CORS_HEADERS = self._parse_list("CORS_HEADERS", self.CORS_HEADERS)
+    @field_validator('container_env')
+    @classmethod
+    def validate_container_env(cls, v: str) -> str:
+        """Validate container environment"""
+        valid_envs = ["development", "staging", "production"]
+        if v.lower() not in valid_envs:
+            logger.warning(f"CONTAINER_ENV '{v}' is not a standard environment")
+        return v.lower()
     
-    def _validate(self) -> None:
-        """Validiere Konfiguration"""
-        errors = []
-        
-        # Database Validierung
-        if not self.DATABASE_USER:
-            errors.append("DATABASE_USER nicht gesetzt")
-        if not self.DATABASE_PASSWORD:
-            errors.append("DATABASE_PASSWORD sollte nicht leer sein")
-        if self.DATABASE_PORT not in range(1, 65536):
-            errors.append(f"DATABASE_PORT ungültig: {self.DATABASE_PORT}")
-        
-        # API Validierung
-        if self.API_PORT not in range(1, 65536):
-            errors.append(f"API_PORT ungültig: {self.API_PORT}")
-        if self.LOG_LEVEL not in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
-            errors.append(f"LOG_LEVEL ungültig: {self.LOG_LEVEL}")
-        
-        # Subgraph Validierung
-        if self.SUBGRAPH_TIMEOUT < 5:
-            errors.append(f"SUBGRAPH_TIMEOUT sollte >= 5s sein")
-        
-        # Production Warnings
-        if self.CONTAINER_ENV == "production":
-            if self.SECRET_KEY == "change-this-in-production":
-                errors.append("SECRET_KEY muss in Production geändert werden!")
-            if self.DEBUG:
-                logger.warning("DEBUG=True in Production ist nicht empfohlen!")
-        
-        if errors:
-            error_msg = "\n  - ".join(errors)
-            raise ConfigError(f"Konfigurationsfehler:\n  - {error_msg}")
-    
-    @staticmethod
-    def _parse_bool(key: str, default: bool) -> bool:
-        """Parse boolean value"""
-        value = os.environ.get(key, "").lower()
-        if value in ["true", "1", "yes", "on"]:
-            return True
-        elif value in ["false", "0", "no", "off"]:
-            return False
-        return default
-    
-    @staticmethod
-    def _parse_int(key: str, default: Optional[int]) -> Optional[int]:
-        """Parse integer value"""
-        value = os.environ.get(key)
-        if value is None:
-            return default
-        try:
-            return int(value)
-        except ValueError:
-            logger.warning(f"Could not parse {key}={value} as int, using default {default}")
-            return default
-    
-    @staticmethod
-    def _parse_list(key: str, default: list) -> list:
-        """Parse comma-separated list"""
-        value = os.environ.get(key)
-        if value is None:
-            return default
-        return [item.strip() for item in value.split(",") if item.strip()]
+    @field_validator('secret_key')
+    @classmethod
+    def validate_secret_key(cls, v: str, info) -> str:
+        """Validate secret key in production"""
+        if info.data.get('container_env') == "production":
+            if v == "change-this-in-production":
+                raise ValueError("SECRET_KEY must be changed in production environment!")
+        return v
     
     def get_database_url(self) -> str:
         """
@@ -235,32 +141,28 @@ class Config:
         Returns:
             PostgreSQL URL für psycopg2/SQLAlchemy
         """
-        ssl_part = f"?sslmode={self.DATABASE_SSL_MODE}" if self.DATABASE_SSL_MODE != "disable" else ""
+        ssl_part = f"?sslmode={self.database_ssl_mode}" if self.database_ssl_mode != "disable" else ""
         return (
-            f"postgresql://{self.DATABASE_USER}:{self.DATABASE_PASSWORD}"
-            f"@{self.DATABASE_HOST}:{self.DATABASE_PORT}/{self.DATABASE_NAME}{ssl_part}"
+            f"postgresql://{self.database_user}:{self.database_password}"
+            f"@{self.database_host}:{self.database_port}/{self.database_name}{ssl_part}"
         )
     
     def to_dict(self) -> Dict[str, Any]:
         """Konvertiert Konfiguration zu Dictionary"""
-        return {
-            key: getattr(self, key)
-            for key in dir(self)
-            if not key.startswith('_') and key.isupper()
-        }
+        return self.model_dump()
     
     def __repr__(self) -> str:
         """String representation"""
-        config_dict = self.to_dict()
+        config_dict = self.model_dump()
         # Maskiere sensitive Werte
-        config_dict['DATABASE_PASSWORD'] = '***'
-        config_dict['SECRET_KEY'] = '***'
+        config_dict['database_password'] = '***'
+        config_dict['secret_key'] = '***'
         
         items = "\n  ".join(f"{k}: {v}" for k, v in sorted(config_dict.items()))
         return f"Config(\n  {items}\n)"
 
 
-# Singleton Pattern
+# Singleton Pattern für Backward Compatibility
 _config_instance: Optional[Config] = None
 
 
@@ -274,7 +176,12 @@ def get_config() -> Config:
     global _config_instance
     
     if _config_instance is None:
-        _config_instance = Config.from_env()
+        try:
+            _config_instance = Config()
+            logger.info(f"Configuration loaded (ENV={_config_instance.container_env})")
+        except Exception as e:
+            logger.error(f"Configuration validation failed: {e}")
+            raise ConfigError(f"Konfigurationsfehler: {e}") from e
     
     return _config_instance
 
@@ -287,5 +194,5 @@ def reload_config() -> Config:
         Neue Config Instanz
     """
     global _config_instance
-    _config_instance = Config.from_env()
+    _config_instance = Config()
     return _config_instance
