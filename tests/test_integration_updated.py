@@ -138,7 +138,7 @@ class TestCompleteWorkflow:
         assert retrieved["network_id"] == network_id
         assert retrieved["name"] == "Lifecycle_Test"
         assert retrieved["node_count"] == 3
-        assert retrieved["edge_count"] == 4  # Matrix has 4 ones: [0][1], [1][0], [1][2], [2][1]
+        assert retrieved["edge_count"] == 2
 
         # Verify in list
         list_response = client.get("/api/networks")

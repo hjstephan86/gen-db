@@ -6,6 +6,11 @@ mittels ProcessPoolExecutor. Dies ermöglicht nicht-blockierende Requests.
 
 Die C++-Implementierung (aus csubgraph) wird als CLI-Tool aufgerufen,
 das JSON via stdin/stdout verarbeitet.
+
+ZENTRALE KONFIGURATION VIA PYDANTIC:
+- Nutzt get_config() von config.py
+- Subgraph Settings über Config.get_subgraph_config()
+- Umgebungsvariablen und .env automatisch integriert
 """
 
 import logging
@@ -16,7 +21,6 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Tuple, Optional, Dict, List
 from functools import lru_cache
 import threading
-from .config import get_config
 
 logger = logging.getLogger(__name__)
 
@@ -28,13 +32,31 @@ _executor_lock = threading.Lock()
 DEFAULT_MAX_WORKERS = max(os.cpu_count() or 2, 2)
 
 
+def _get_config_safe():
+    """
+    Gibt Config Instanz zurück (mit Fallback für Tests ohne Config)
+    
+    Returns:
+        Config Instanz oder None wenn nicht verfügbar
+    """
+    try:
+        from .config import get_config
+        return get_config()
+    except Exception as e:
+        logger.debug(f"Could not load config: {e}")
+        return None
+
+
 def get_executor(max_workers: Optional[int] = None) -> ProcessPoolExecutor:
     """
     Gibt globalen ProcessPoolExecutor zurück (Singleton).
     
+    Nutzt Pydantic Config für max_workers wenn nicht übergeben:
+    1. Nutzt Config.subgraph_max_workers wenn gesetzt
+    2. Fällt zurück auf DEFAULT_MAX_WORKERS (cpu_count)
+    
     Args:
-        max_workers: Maximale Anzahl paralleler Prozesse.
-                    Wenn None, wird es aus der Config gelesen oder DEFAULT_MAX_WORKERS verwendet.
+        max_workers: Maximale Anzahl paralleler Prozesse (optional)
         
     Returns:
         ProcessPoolExecutor Instanz
@@ -42,14 +64,17 @@ def get_executor(max_workers: Optional[int] = None) -> ProcessPoolExecutor:
     global _executor
     
     if max_workers is None:
-        config = get_config()
-        max_workers = config.subgraph_max_workers or DEFAULT_MAX_WORKERS
+        config = _get_config_safe()
+        if config and config.subgraph_max_workers:
+            max_workers = config.subgraph_max_workers
+        else:
+            max_workers = DEFAULT_MAX_WORKERS
     
     if _executor is None:
         with _executor_lock:
             if _executor is None:
                 _executor = ProcessPoolExecutor(max_workers=max_workers)
-                logger.info(f"ProcessPoolExecutor initialized with {max_workers} workers")
+                logger.info(f"ProcessPoolExecutor initialized with {max_workers} workers (via Pydantic Config)")
     
     return _executor
 
@@ -59,25 +84,29 @@ def get_cli_path() -> Optional[str]:
     """
     Findet den Pfad zur subgraph-cli Binärdatei.
     
-    Sucht in dieser Reihenfolge:
-    1. SUBGRAPH_CLI_PATH aus Umgebungsvariable (oder Config)
-    2. ../../../csubgraph-main/build/subgraph-cli
-    3. ./subgraph-cli
-    4. /usr/local/bin/subgraph-cli
+    ZENTRALE LÖSUNG via Pydantic Config:
+    1. Nutzt Config.subgraph_cli_path (aus .env oder Env-Var)
+    2. Prüft SUBGRAPH_CLI_PATH Umgebungsvariable (Fallback)
+    3. Relative Pfade (../../../csubgraph-main/build/subgraph-cli)
+    4. System PATH (/usr/local/bin/subgraph-cli)
     
     Returns:
         Pfad zur CLI oder None wenn nicht gefunden
+        
+    Note:
+        Die Pydantic Config integriert SUBGRAPH_CLI_PATH automatisch,
+        daher ist diese Funktion zentral konfigurierbar.
     """
-    # 1. Konfiguration prüfen (kann auch aus .env kommen)
-    try:
-        config = get_config()
-        if config.subgraph_cli_path and os.path.isfile(config.subgraph_cli_path):
-            logger.debug(f"Found subgraph-cli via config: {config.subgraph_cli_path}")
+    # 1. Nutze Pydantic Config (hat bereits Env-Var geladen)
+    config = _get_config_safe()
+    if config and config.subgraph_cli_path:
+        if os.path.isfile(config.subgraph_cli_path):
+            logger.debug(f"Found subgraph-cli via Pydantic Config: {config.subgraph_cli_path}")
             return config.subgraph_cli_path
-    except Exception as e:
-        logger.debug(f"Could not load config for CLI path: {e}")
+        else:
+            logger.warning(f"Config specifies {config.subgraph_cli_path} but file does not exist")
     
-    # 2. Umgebungsvariable prüfen (Fallback)
+    # 2. Fallback: Umgebungsvariable prüfen (für Legacy Support)
     env_path = os.environ.get('SUBGRAPH_CLI_PATH')
     if env_path and os.path.isfile(env_path):
         logger.debug(f"Found subgraph-cli via SUBGRAPH_CLI_PATH env var: {env_path}")
@@ -94,16 +123,21 @@ def get_cli_path() -> Optional[str]:
     for path in relative_paths:
         abs_path = os.path.abspath(path)
         if os.path.isfile(abs_path):
-            logger.debug(f"Found subgraph-cli at: {abs_path}")
+            logger.debug(f"Found subgraph-cli at relative path: {abs_path}")
             return abs_path
     
     # 4. System PATH prüfen
     for system_path in ['/usr/local/bin/subgraph-cli', 'C:\\Program Files\\subgraph\\subgraph-cli.exe']:
         if os.path.isfile(system_path):
-            logger.debug(f"Found subgraph-cli at: {system_path}")
+            logger.debug(f"Found subgraph-cli at system path: {system_path}")
             return system_path
     
-    logger.warning("subgraph-cli binary not found. Set SUBGRAPH_CLI_PATH environment variable or config.")
+    logger.warning(
+        "subgraph-cli binary not found. "
+        "Set via: SUBGRAPH_CLI_PATH=/path/to/subgraph-cli or "
+        "SUBGRAPH_CLI_PATH in .env file or "
+        "Config.subgraph_cli_path in code"
+    )
     return None
 
 
@@ -114,7 +148,7 @@ def execute_subgraph_comparison(graph_a: List[List[int]], graph_b: List[List[int
     Diese Funktion wird in einem separaten Prozess ausgeführt, um
     CPU-intensive C++-Berechnungen nicht zu blockieren.
     
-    Der Timeout wird aus der Pydantic Config gelesen (subgraph_timeout).
+    Timeout wird aus Pydantic Config gelesen (subgraph_timeout).
     
     Args:
         graph_a: Erste Adjazenzmatrix als Liste von Listen
@@ -132,14 +166,12 @@ def execute_subgraph_comparison(graph_a: List[List[int]], graph_b: List[List[int
     if not cli_path:
         raise RuntimeError(
             "subgraph-cli binary not found. "
-            "Build csubgraph with: cd csubgraph-main && mkdir build && "
-            "cd build && cmake .. && cmake --build ."
+            "Set SUBGRAPH_CLI_PATH or in .env: SUBGRAPH_CLI_PATH=/path/to/cli"
         )
     
-    # Timeout aus Config lesen
-    config = get_config()
-    timeout = config.subgraph_timeout
-    logger.debug(f"Subgraph comparison timeout: {timeout}s")
+    # Get timeout from Pydantic Config
+    config = _get_config_safe()
+    timeout = config.subgraph_timeout if config else 30
     
     # Prepare input JSON
     input_data = {
@@ -148,13 +180,13 @@ def execute_subgraph_comparison(graph_a: List[List[int]], graph_b: List[List[int
     }
     
     try:
-        # Rufe C++-CLI-Tool auf mit Timeout aus Config
+        # Rufe C++-CLI-Tool auf (Timeout aus Config)
         result = subprocess.run(
             [cli_path],
             input=json.dumps(input_data),
             capture_output=True,
             text=True,
-            timeout=timeout,  # Jetzt aus Config!
+            timeout=timeout,  # Aus Config gelesen
         )
         
         if result.returncode != 0:
@@ -172,7 +204,9 @@ def execute_subgraph_comparison(graph_a: List[List[int]], graph_b: List[List[int
         return result_str, None
         
     except subprocess.TimeoutExpired:
-        return None, f"Subgraph comparison timed out ({timeout}s)"
+        config = _get_config_safe()
+        timeout_secs = config.subgraph_timeout if config else 30
+        return None, f"Subgraph comparison timed out ({timeout_secs}s)"
     except json.JSONDecodeError as e:
         return None, f"Invalid JSON from CLI: {str(e)}"
     except Exception as e:

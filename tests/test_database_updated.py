@@ -16,11 +16,8 @@ class TestDatabaseConnection:
 
     def test_get_db_connection_success(self, test_db_config, monkeypatch):
         """Test successful database connection"""
-        # Patch get_database_config to use test config
-        def mock_get_database_config():
-            return test_db_config
-        
-        monkeypatch.setattr('backend.database.get_database_config', mock_get_database_config)
+        # Patch database config to use test config
+        monkeypatch.setattr('backend.database.DATABASE_CONFIG', test_db_config)
 
         with get_db_connection() as conn:
             assert conn is not None
@@ -42,10 +39,7 @@ class TestDatabaseConnection:
 
     def test_get_db_connection_rollback_on_error(self, test_db_config, monkeypatch):
         """Test database rollback on error"""
-        def mock_get_database_config():
-            return test_db_config
-        
-        monkeypatch.setattr('backend.database.get_database_config', mock_get_database_config)
+        monkeypatch.setattr('backend.database.DATABASE_CONFIG', test_db_config)
 
         with pytest.raises(psycopg2.Error):
             with get_db_connection() as conn:
@@ -55,10 +49,7 @@ class TestDatabaseConnection:
 
     def test_get_db_connection_closes_after_context(self, test_db_config, monkeypatch):
         """Test that connection closes after context manager"""
-        def mock_get_database_config():
-            return test_db_config
-        
-        monkeypatch.setattr('backend.database.get_database_config', mock_get_database_config)
+        monkeypatch.setattr('backend.database.DATABASE_CONFIG', test_db_config)
 
         with get_db_connection() as conn:
             pass
@@ -95,10 +86,7 @@ class TestDatabaseConnection:
 
     def test_database_connection_pool_size(self, test_db_config, monkeypatch):
         """Test that database respects pool size configuration"""
-        def mock_get_database_config():
-            return test_db_config
-        
-        monkeypatch.setattr('backend.database.get_database_config', mock_get_database_config)
+        monkeypatch.setattr('backend.database.DATABASE_CONFIG', test_db_config)
 
         # Get multiple connections
         with get_db_connection() as conn1:
@@ -183,13 +171,13 @@ class TestDatabaseConnection:
         clean_database.commit()
 
         # Verify entry exists
-        cursor.execute("SELECT COUNT(*) as cnt FROM network_matrices WHERE network_id=%s", (network_id,))
-        assert cursor.fetchone()['cnt'] == 1
+        cursor.execute("SELECT COUNT(*) FROM network_matrices WHERE network_id=%s", (network_id,))
+        assert cursor.fetchone()[0] == 1
 
         # Delete network
         cursor.execute("DELETE FROM biological_networks WHERE network_id=%s", (network_id,))
         clean_database.commit()
 
         # Verify matrix entry is also deleted (CASCADE)
-        cursor.execute("SELECT COUNT(*) as cnt FROM network_matrices WHERE network_id=%s", (network_id,))
-        assert cursor.fetchone()['cnt'] == 0
+        cursor.execute("SELECT COUNT(*) FROM network_matrices WHERE network_id=%s", (network_id,))
+        assert cursor.fetchone()[0] == 0

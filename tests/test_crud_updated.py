@@ -269,7 +269,6 @@ class TestSubgraphSearch:
         assert isinstance(matches, list)
         assert all(isinstance(m, SearchMatch) for m in matches)
 
-    @pytest.mark.skip(reason="Requires real C++ binary - tests complex subgraph logic")
     def test_search_subgraph_finds_superset(self, clean_database, sample_glycolysis,
                                             sample_partial_glycolysis, monkeypatch):
         """Test finding network that contains the query subgraph"""
